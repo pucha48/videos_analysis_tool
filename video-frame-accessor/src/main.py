@@ -1,4 +1,5 @@
 import os
+import re
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
@@ -15,9 +16,33 @@ def get_frames(folder):
     return sorted([os.path.join(folder, f) for f in os.listdir(folder)
                   if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
 
-def create_thumbnail(image_path):
+def extract_float_from_filename(filename):
+    # Extract float at the end of the filename before extension, else return 0.0
+    match = re.search(r'([0-9]*\.?[0-9]+)(?=\.[^.]+$)', os.path.basename(filename))
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
+    return 0.0
+
+def create_thumbnail_with_text(image_path, text):
     img = Image.open(image_path)
     img.thumbnail(THUMBNAIL_SIZE)
+    # Draw text
+    from PIL import ImageDraw, ImageFont
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 14)
+    except:
+        font = ImageFont.load_default()
+    # Draw text with outline for visibility
+    x, y = 5, 5
+    outline_color = "black"
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            draw.text((x+dx, y+dy), text, font=font, fill=outline_color)
+    draw.text((x, y), text, font=font, fill="yellow")
     return ImageTk.PhotoImage(img)
 
 def display_frames_gui(directory):
@@ -63,7 +88,8 @@ def display_frames_gui(directory):
                 for col in range(FRAMES_PER_ROW):
                     frame_idx = start_idx + col
                     if frame_idx < len(frames):
-                        thumb = create_thumbnail(frames[frame_idx])
+                        float_val = extract_float_from_filename(frames[frame_idx])
+                        thumb = create_thumbnail_with_text(frames[frame_idx], f"{float_val:.2f}")
                         thumbnails.append(thumb)
                         thumb_labels[col].configure(image=thumb)
                         thumb_labels[col].image = thumb
