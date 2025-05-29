@@ -1,23 +1,27 @@
 import os
 import re
-import tkinter as tk
-from tkinter import ttk
-from PIL import Image, ImageTk
+import urllib.parse
+import json
+import tempfile
+import shutil
+import time
+from flask import Flask, render_template, request, send_from_directory, abort, jsonify
 
-THUMBNAIL_SIZE = (120, 90)  # Width, Height
+THUMBNAIL_SIZE = (120, 90)
 FRAMES_PER_ROW = 10
 VISIBLE_ROWS = 5
 
+app = Flask(__name__)
+
 def get_video_folders(directory):
-    return [os.path.join(directory, d) for d in os.listdir(directory)
-            if os.path.isdir(os.path.join(directory, d))]
+    return sorted([os.path.join(directory, d) for d in os.listdir(directory)
+            if os.path.isdir(os.path.join(directory, d))])
 
 def get_frames(folder):
     return sorted([os.path.join(folder, f) for f in os.listdir(folder)
                   if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
 
 def extract_float_from_filename(filename):
-    # Extract float at the end of the filename before extension, else return 0.0
     match = re.search(r'([0-9]*\.?[0-9]+)(?=\.[^.]+$)', os.path.basename(filename))
     if match:
         try:
@@ -26,114 +30,214 @@ def extract_float_from_filename(filename):
             return 0.0
     return 0.0
 
-def create_thumbnail_with_text(image_path, text):
-    img = Image.open(image_path)
-    img.thumbnail(THUMBNAIL_SIZE)
-    # Draw text
-    from PIL import ImageDraw, ImageFont
-    draw = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype("arial.ttf", 14)
-    except:
-        font = ImageFont.load_default()
-    # Draw text with outline for visibility
-    x, y = 5, 5
-    outline_color = "black"
-    for dx in [-1, 0, 1]:
-        for dy in [-1, 0, 1]:
-            draw.text((x+dx, y+dy), text, font=font, fill=outline_color)
-    draw.text((x, y), text, font=font, fill="yellow")
-    return ImageTk.PhotoImage(img)
+def safe_load_json(filepath, retries=3, delay=0.05):
+    for attempt in range(retries):
+        try:
+            with open(filepath, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"Error reading {filepath}: {e}")
+                return {}
+            time.sleep(delay)
 
-def display_frames_gui(directory):
-    root = tk.Tk()
-    root.title("Video Frame Viewer")
+def load_labels(folder_name):
+    labels_dir = os.path.abspath('./video-frame-accessor/labels/')
+    label_path = os.path.join(labels_dir, f'{folder_name}.json')
+    return safe_load_json(label_path)
 
-    main_frame = ttk.Frame(root)
-    main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+def atomic_write_json(filepath, data):
+    dirpath = os.path.dirname(filepath)
+    with tempfile.NamedTemporaryFile('w', dir=dirpath, delete=False) as tf:
+        json.dump(data, tf, indent=2)
+        tempname = tf.name
+    shutil.move(tempname, filepath)
 
-    video_folders = get_video_folders(directory)
+@app.route('/')
+def index():
+    data_dir = request.args.get('data_dir', './video-frame-accessor/data/')
+    folder_start = int(request.args.get('folder_start', 0))
+    frame_starts = request.args.getlist('frame_start')
+    frame_starts = [int(x) if x.isdigit() else 0 for x in frame_starts]
+    
+    video_folders = get_video_folders(data_dir)
     total_folders = len(video_folders)
-    thumbnails = []  # Keep references to avoid garbage collection
+    folder_start = min(max(folder_start, 0), max(0, total_folders - VISIBLE_ROWS))
+    visible_folders = video_folders[folder_start:folder_start+VISIBLE_ROWS]
 
-    # Store row widgets for updating
-    row_widgets = []
+    while len(frame_starts) < len(visible_folders):
+        frame_starts.append(0)
+    frame_starts = frame_starts[:len(visible_folders)]
 
-    def update_rows(start_folder_idx):
-        # Clear previous widgets
-        for widgets in row_widgets:
-            for w in widgets:
-                w.destroy()
-        row_widgets.clear()
+    rows = []
+    for idx, folder in enumerate(visible_folders):
+        frames = get_frames(folder)
+        max_start = max(0, len(frames) - FRAMES_PER_ROW)
+        start = min(frame_starts[idx], max_start)
+        row_frames = []
+        folder_name = os.path.basename(folder)
+        labels = load_labels(folder_name)
 
-        for row in range(VISIBLE_ROWS):
-            folder_idx = start_folder_idx + row
-            if folder_idx >= total_folders:
-                break
-            folder = video_folders[folder_idx]
-            frames = get_frames(folder)
-            thumb_labels = []
-            row_frame = ttk.Frame(main_frame)
-            row_frame.grid(row=row*2, column=0, sticky="w")
-            row_widgets.append([row_frame])
+        # --- Ensure all frames are present in labels with interpolated values ---
+        total_frames = len(frames)
+        if total_frames > 1:
+            for i, frame_path in enumerate(frames):
+                frame_filename = os.path.basename(frame_path)
+                interp_val = i / (total_frames - 1)
+                if frame_filename not in labels:
+                    labels[frame_filename] = f"{interp_val:.2f}"
+        elif total_frames == 1:
+            frame_filename = os.path.basename(frames[0])
+            if frame_filename not in labels:
+                labels[frame_filename] = "0.00"
 
-            # Initial display
-            for col in range(FRAMES_PER_ROW):
-                lbl = ttk.Label(row_frame)
-                lbl.grid(row=0, column=col, padx=2, pady=2)
-                thumb_labels.append(lbl)
-                row_widgets[-1].append(lbl)
+        # Save the updated labels for this folder
+        labels_dir = os.path.abspath('./video-frame-accessor/labels/')
+        os.makedirs(labels_dir, exist_ok=True)
+        label_path = os.path.join(labels_dir, f'{folder_name}.json')
+        with open(label_path, 'w') as f:
+            json.dump(labels, f, indent=2)
+        # -----------------------------------------------------------------------
 
-            def update_row(start_idx, frames=frames, thumb_labels=thumb_labels):
-                for col in range(FRAMES_PER_ROW):
-                    frame_idx = start_idx + col
-                    if frame_idx < len(frames):
-                        float_val = extract_float_from_filename(frames[frame_idx])
-                        thumb = create_thumbnail_with_text(frames[frame_idx], f"{float_val:.2f}")
-                        thumbnails.append(thumb)
-                        thumb_labels[col].configure(image=thumb)
-                        thumb_labels[col].image = thumb
-                    else:
-                        thumb_labels[col].configure(image='')
-                        thumb_labels[col].image = None
+        for i in range(FRAMES_PER_ROW):
+            frame_idx = start + i
+            if frame_idx < len(frames):
+                frame_path = frames[frame_idx]
+                float_val = extract_float_from_filename(frame_path)
+                img_url = "/frame_image?folder={}&img={}".format(
+                    urllib.parse.quote(folder_name),
+                    urllib.parse.quote(os.path.basename(frame_path))
+                )
+                row_frames.append({
+                    'img_url': img_url,
+                    'float_val': f"{float_val:.2f}",
+                    'filename': os.path.basename(frame_path)
+                })
+            else:
+                row_frames.append(None)
+        rows.append({
+            'folder': folder_name,
+            'frames': row_frames,
+            'max_start': max_start,
+            'start': start,
+            'labels': labels
+        })
 
-            # Slider for this row
-            slider_frame = ttk.Frame(main_frame)
-            slider_frame.grid(row=row*2+1, column=0, sticky="w")
-            row_widgets[-1].append(slider_frame)
-            max_start = max(0, len(frames) - FRAMES_PER_ROW)
-            slider = tk.Scale(
-                slider_frame, from_=0, to=max_start, orient=tk.HORIZONTAL,
-                length=FRAMES_PER_ROW * (THUMBNAIL_SIZE[0] + 4),
-                command=lambda val, f=frames, t=thumb_labels: update_row(int(float(val)), f, t)
-            )
-            slider.pack(side=tk.LEFT, padx=5, pady=2)
-            row_widgets[-1].append(slider)
-
-            # Show initial frames
-            update_row(0, frames, thumb_labels)
-
-    # Vertical slider to control which 5 folders are visible
-    def on_vertical_slide(val):
-        start_folder_idx = int(float(val))
-        update_rows(start_folder_idx)
-
-    max_folder_start = max(0, total_folders - VISIBLE_ROWS)
-    v_slider = tk.Scale(
-        root, from_=0, to=max_folder_start, orient=tk.VERTICAL,
-        length=VISIBLE_ROWS * (THUMBNAIL_SIZE[1] + 40),
-        command=on_vertical_slide,
-        label="Videos"
+    return render_template(
+        'viewer.html', 
+        rows=rows, 
+        folder_start=folder_start, 
+        max_folder_start=max(0, total_folders - VISIBLE_ROWS),
+        data_dir=data_dir,
+        frame_starts=frame_starts,
+        FRAMES_PER_ROW=FRAMES_PER_ROW
     )
-    v_slider.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
 
-    update_rows(0)
+@app.route('/frame_image')
+def frame_image():
+    folder = request.args.get('folder')
+    img = request.args.get('img')
+    data_dir = os.path.abspath('./video-frame-accessor/data/')
+    if not folder or not img:
+        abort(404)
+    folder_path = os.path.join(data_dir, folder)
+    image_path = os.path.join(folder_path, img)
+    print("Trying to serve:", image_path)  # Debug print
+    if not (os.path.exists(image_path) and os.path.isfile(image_path)):
+        print("File not found:", image_path)  # Debug print
+        abort(404)
+    return send_from_directory(folder_path, img)
 
-    root.mainloop()
+@app.route('/save_label', methods=['POST'])
+def save_label():
+    data = request.get_json()
+    folder = data['folder']
+    frame = data['frame']
+    value = float(data['value'])
+    value = max(0.0, min(1.0, value))  # Clamp between 0 and 1
+
+    # Paths
+    labels_dir = os.path.abspath('./video-frame-accessor/labels/')
+    os.makedirs(labels_dir, exist_ok=True)
+    user_points_path = os.path.join(labels_dir, f'{folder}_user_points.json')
+    labels_path = os.path.join(labels_dir, f'{folder}.json')
+    data_dir = os.path.abspath('./video-frame-accessor/data/')
+    folder_path = os.path.join(data_dir, folder)
+    frames = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+
+    # Load user points (anchors)
+    if os.path.exists(user_points_path):
+        try:
+            with open(user_points_path, 'r') as f:
+                user_points = json.load(f)
+        except Exception:
+            user_points = {}
+    else:
+        user_points = {}
+
+    # Update/add the user value (only user input changes this file)
+    user_points[frame] = f"{value:.2f}"
+    with open(user_points_path, 'w') as f:
+        json.dump(user_points, f, indent=2)
+
+    # Build a sorted list of (index, value) for all user-provided frames (anchors)
+    user_points_list = []
+    for idx, fname in enumerate(frames):
+        if fname in user_points:
+            try:
+                v = float(user_points[fname])
+                v = max(0.0, min(1.0, v))
+                user_points_list.append((idx, v))
+            except Exception:
+                pass
+
+    # Add virtual anchors at start and end if not present
+    if not any(idx == 0 for idx, _ in user_points_list):
+        user_points_list.append((0, 0.0))
+    if not any(idx == len(frames) - 1 for idx, _ in user_points_list):
+        user_points_list.append((len(frames) - 1, 1.0))
+
+    user_points_list = sorted(user_points_list, key=lambda t: t[0])
+
+    # Interpolate for all frames using anchors only
+    labels = {}
+    n = len(frames)
+    for i, fname in enumerate(frames):
+        # Find left and right anchors
+        left = None
+        right = None
+        for idx, v in user_points_list:
+            if idx <= i:
+                left = (idx, v)
+            if idx >= i and right is None:
+                right = (idx, v)
+        # Interpolate
+        if left and right:
+            if left[0] == right[0]:
+                interp = left[1]
+            else:
+                interp = left[1] + (right[1] - left[1]) * (i - left[0]) / (right[0] - left[0])
+        elif left:
+            interp = left[1]
+        elif right:
+            interp = right[1]
+        else:
+            interp = i / (n - 1) if n > 1 else 0.0
+        interp = max(0.0, min(1.0, interp))
+        labels[fname] = f"{interp:.2f}"
+
+    # Save interpolated labels for all frames
+    atomic_write_json(labels_path, labels)
+
+    return jsonify(success=True)
+
+@app.route('/get_labels')
+def get_labels():
+    folder = request.args.get('folder')
+    if not folder:
+        return jsonify({})
+    labels = load_labels(folder)
+    return jsonify(labels)
 
 if __name__ == "__main__":
-    video_frames_directory = "./video-frame-accessor/data/"  # Update this path if needed
-    if not os.path.exists(video_frames_directory):
-        print(f"The directory {video_frames_directory} does not exist.")
-    else:
-        display_frames_gui(video_frames_directory)
+    app.run(debug=True)

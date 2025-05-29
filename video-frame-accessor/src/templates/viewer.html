@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Frame Viewer</title>
+    <style>
+        .thumbnail { width: 120px; height: 90px; object-fit: cover; border: 1px solid #ccc; }
+        .frame-cell { text-align: center; vertical-align: top; }
+        .slider-row { margin-bottom: 10px; }
+        .float-label { position: relative; top: -25px; left: 5px; color: yellow; text-shadow: 1px 1px 2px black; font-weight: bold; }
+        .folder-label { font-weight: bold; margin-bottom: 2px; }
+        .vertical-slider { writing-mode: bt-lr; -webkit-appearance: slider-vertical; width: 20px; height: 500px; }
+        .input-box { width: 50px; text-align: center; margin-top: 2px; }
+        .row-flex { display: flex; align-items: flex-start; margin-bottom: 10px; }
+        .main-flex { display: flex; }
+        .vertical-bar-container { display: flex; flex-direction: column; align-items: center; margin-left: 20px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h2>Video Frame Viewer</h2>
+    <div class="main-flex">
+        <div style="flex: 1;">
+            {% for row in rows %}
+            <div class="row-flex">
+                <div>
+                    <div class="folder-label">{{ row.folder }}</div>
+                    <div style="display: flex;" class="slider-row" data-row-idx="{{ loop.index0 }}">
+                        {% for frame in row.frames %}
+                            <div class="frame-cell">
+                                {% if frame %}
+                                    <div style="position: relative;">
+                                        <img class="thumbnail" src="{{ frame.img_url }}">
+                                        <div class="float-label">{{ row.labels[frame.filename] }}</div>
+                                    </div>
+                                    <div style="font-size: 10px;">{{ frame.filename }}</div>
+                                    <input class="input-box"
+                                           type="number" min="0" max="1" step="0.01"
+                                           value="{{ row.labels[frame.filename] }}"
+                                           data-folder="{{ row.folder }}"
+                                           data-frame="{{ frame.filename }}"
+                                           onchange="saveBoxValue(this)">
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                        <!-- Plot as the last cell, same size as thumbnail -->
+                        <div class="frame-cell" style="display: flex; flex-direction: column; align-items: center;">
+                            <canvas id="plot_{{ loop.index0 }}" width="120" height="90"></canvas>
+                            <div style="font-size: 10px;">Box Plot</div>
+                        </div>
+                    </div>
+                    <input 
+                        type="range" 
+                        min="0" 
+                        max="{{ row.max_start }}" 
+                        value="{{ row.start }}" 
+                        id="frame_slider_{{ loop.index0 }}" 
+                        oninput="updateFrameSlider({{ loop.index0 }}, this.value)"
+                        style="width: {{ 130 * row.frames|length }}px;"
+                    >
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <!-- Single vertical bar for all videos -->
+        <div class="vertical-bar-container">
+            <input 
+                type="range" 
+                min="0" 
+                max="{{ max_folder_start }}" 
+                value="{{ folder_start }}" 
+                class="vertical-slider"
+                oninput="updateFolderSlider(this.value)"
+                style="height: {{ 130 * rows|length }}px;"
+            >
+            <div>Scroll Videos</div>
+        </div>
+    </div>
+    <script>
+    let charts = {};
+
+    function renderPlot(rowIdx, labels, values) {
+        const ctx = document.getElementById('plot_' + rowIdx).getContext('2d');
+        if (charts[rowIdx]) {
+            charts[rowIdx].data.labels = labels;
+            charts[rowIdx].data.datasets[0].data = values;
+            charts[rowIdx].update();
+        } else {
+            charts[rowIdx] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '',
+                        data: values,
+                        borderColor: 'blue',
+                        backgroundColor: 'rgba(0,0,255,0.1)',
+                        pointRadius: 2,
+                        fill: false,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: { display: false },
+                        y: { min: 0, max: 1, display: false }
+                    }
+                }
+            });
+        }
+    }
+
+    // Initial plot rendering for all frames in each row
+    window.addEventListener('DOMContentLoaded', function() {
+        {% for row in rows %}
+            fetch(`/get_labels?folder={{ row.folder }}`)
+                .then(resp => resp.json())
+                .then(labels => {
+                    let labelsArr = Object.keys(labels);
+                    let valuesArr = Object.values(labels).map(parseFloat);
+                    renderPlot({{ loop.index0 }}, labelsArr, valuesArr);
+                });
+        {% endfor %}
+    });
+
+    // Update plot after user input
+    function saveBoxValue(input) {
+        fetch('/save_label', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                folder: input.getAttribute('data-folder'),
+                frame: input.getAttribute('data-frame'),
+                value: input.value
+            })
+        }).then(response => response.json())
+          .then(data => {
+            // After saving, fetch new labels and update the plot
+            let folder = input.getAttribute('data-folder');
+            let rowDiv = input.closest('.slider-row');
+            let rowIdx = rowDiv ? rowDiv.getAttribute('data-row-idx') : 0;
+            fetch(`/get_labels?folder=${encodeURIComponent(folder)}`)
+                .then(resp => resp.json())
+                .then(labels => {
+                    let labelsArr = Object.keys(labels);
+                    let valuesArr = Object.values(labels).map(parseFloat);
+                    renderPlot(rowIdx, labelsArr, valuesArr);
+                });
+          });
+    }
+
+    function updateFolderSlider(val) {
+        let params = new URLSearchParams(window.location.search);
+        params.set('folder_start', val);
+        params.delete('frame_start');
+        window.location.search = params.toString();
+    }
+    function updateFrameSlider(row, val) {
+        let params = new URLSearchParams(window.location.search);
+        let frame_starts = [];
+        for (let i = 0; i < {{ rows|length }}; i++) {
+            if (i == row) frame_starts.push(val);
+            else {
+                let slider = document.getElementById('frame_slider_' + i);
+                frame_starts.push(slider ? slider.value : 0);
+            }
+        }
+        params.delete('frame_start');
+        frame_starts.forEach(v => params.append('frame_start', v));
+        params.set('folder_start', {{ folder_start }});
+        window.location.search = params.toString();
+    }
+    </script>
+</body>
+</html>
