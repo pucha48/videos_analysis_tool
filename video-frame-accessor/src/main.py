@@ -7,9 +7,11 @@ import shutil
 import time
 from flask import Flask, render_template, request, send_from_directory, abort, jsonify
 
-THUMBNAIL_SIZE = (120, 90)
-FRAMES_PER_ROW = 10
-VISIBLE_ROWS = 5
+THUMBNAIL_SIZE = (220, 180)
+FRAMES_PER_ROW = 7
+VISIBLE_ROWS = 3
+DATA_PATH = "../root_data/data"
+LABEL_FOLDER_PATH = "../labels"
 
 app = Flask(__name__)
 
@@ -54,8 +56,8 @@ def atomic_write_json(filepath, data):
 
 @app.route('/')
 def index():
-    data_dir = request.args.get('data_dir', './video-frame-accessor/data/')
-    labels_dir = request.args.get('labels_dir', './video-frame-accessor/labels/')
+    data_dir = request.args.get('data_dir', DATA_PATH)
+    labels_dir = request.args.get('labels_dir', LABEL_FOLDER_PATH)
     folder_start = int(request.args.get('folder_start', 0))
     frame_starts = request.args.getlist('frame_start')
     frame_starts = [int(x) if x.isdigit() else 0 for x in frame_starts]
@@ -92,7 +94,7 @@ def index():
                 labels[frame_filename] = "0.00"
 
         # Save the updated labels for this folder
-        labels_dir = os.path.abspath('./video-frame-accessor/labels/')
+        labels_dir = os.path.abspath(LABEL_FOLDER_PATH)
         os.makedirs(labels_dir, exist_ok=True)
         label_path = os.path.join(labels_dir, f'{folder_name}.json')
         with open(label_path, 'w') as f:
@@ -138,7 +140,7 @@ def index():
 def frame_image():
     folder = request.args.get('folder')
     img = request.args.get('img')
-    data_dir = os.path.abspath('./video-frame-accessor/data/')
+    data_dir = os.path.abspath(DATA_PATH)
     if not folder or not img:
         abort(404)
     folder_path = os.path.join(data_dir, folder)
@@ -158,11 +160,11 @@ def save_label():
     value = max(0.0, min(1.0, value))  # Clamp between 0 and 1
 
     # Get labels_dir from query or default
-    labels_dir = request.args.get('labels_dir', './video-frame-accessor/labels/')
+    labels_dir = request.args.get('labels_dir',LABEL_FOLDER_PATH)
     os.makedirs(labels_dir, exist_ok=True)
     user_points_path = os.path.join(labels_dir, f'{folder}_user_points.json')
     labels_path = os.path.join(labels_dir, f'{folder}.json')
-    data_dir = os.path.abspath('./video-frame-accessor/data/')
+    data_dir = os.path.abspath(DATA_PATH)
     folder_path = os.path.join(data_dir, folder)
     frames = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
 
@@ -234,7 +236,7 @@ def save_label():
 @app.route('/get_labels')
 def get_labels():
     folder = request.args.get('folder')
-    labels_dir = request.args.get('labels_dir', './video-frame-accessor/labels/')
+    labels_dir = request.args.get('labels_dir', LABEL_FOLDER_PATH)
     if not folder:
         return jsonify({})
     labels = load_labels(folder, labels_dir)

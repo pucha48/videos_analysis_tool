@@ -3,7 +3,7 @@
 <head>
     <title>Video Frame Viewer</title>
     <style>
-        .thumbnail { width: 120px; height: 90px; object-fit: cover; border: 1px solid #ccc; }
+        .thumbnail { width: 220px; height: 180px; object-fit: cover; border: 1px solid #ccc; }
         .frame-cell { text-align: center; vertical-align: top; }
         .slider-row { margin-bottom: 10px; }
         .float-label { position: relative; top: -25px; left: 5px; color: yellow; text-shadow: 1px 1px 2px black; font-weight: bold; }
@@ -56,7 +56,7 @@
                         {% endfor %}
                         <!-- Plot as the last cell, same size as thumbnail -->
                         <div class="frame-cell" style="display: flex; flex-direction: column; align-items: center;">
-                            <canvas id="plot_{{ loop.index0 }}" width="120" height="90"></canvas>
+                            <canvas id="plot_{{ loop.index0 }}" width="220" height="180"></canvas>
                             <div style="font-size: 10px;">Box Plot</div>
                         </div>
                     </div>
