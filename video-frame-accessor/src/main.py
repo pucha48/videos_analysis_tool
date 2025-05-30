@@ -10,7 +10,7 @@ from flask import Flask, render_template, request, send_from_directory, abort, j
 THUMBNAIL_SIZE = (220, 180)
 FRAMES_PER_ROW = 7
 VISIBLE_ROWS = 3
-DATA_PATH = "../root_data/data"
+DATA_PATH = "./../video-frame-accessor/data/"
 LABEL_FOLDER_PATH = "../labels"
 
 app = Flask(__name__)
@@ -112,7 +112,8 @@ def index():
                 )
                 row_frames.append({
                     'img_url': img_url,
-                    'float_val': f"{float_val:.2f}",
+                    'float_val': f"{float_val:.2f}",  # extracted from filename
+                    'box_val': labels.get(os.path.basename(frame_path), ""),  # interpolated/user value
                     'filename': os.path.basename(frame_path)
                 })
             else:

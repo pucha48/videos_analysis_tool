@@ -42,12 +42,12 @@
                                 {% if frame %}
                                     <div style="position: relative;">
                                         <img class="thumbnail" src="{{ frame.img_url }}">
-                                        <div class="float-label">{{ row.labels[frame.filename] }}</div>
+                                        <div class="float-label">{{ frame.float_val }}</div> <!-- Show float from filename -->
                                     </div>
                                     <div style="font-size: 10px;">{{ frame.filename }}</div>
                                     <input class="input-box"
                                            type="number" min="0" max="1" step="0.01"
-                                           value="{{ row.labels[frame.filename] }}"
+                                           value="{{ frame.box_val }}"
                                            data-folder="{{ row.folder }}"
                                            data-frame="{{ frame.filename }}"
                                            onchange="saveBoxValue(this)">
