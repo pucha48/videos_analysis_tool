@@ -41,8 +41,7 @@ def safe_load_json(filepath, retries=3, delay=0.05):
                 return {}
             time.sleep(delay)
 
-def load_labels(folder_name):
-    labels_dir = os.path.abspath('./video-frame-accessor/labels/')
+def load_labels(folder_name, labels_dir):
     label_path = os.path.join(labels_dir, f'{folder_name}.json')
     return safe_load_json(label_path)
 
@@ -56,6 +55,7 @@ def atomic_write_json(filepath, data):
 @app.route('/')
 def index():
     data_dir = request.args.get('data_dir', './video-frame-accessor/data/')
+    labels_dir = request.args.get('labels_dir', './video-frame-accessor/labels/')
     folder_start = int(request.args.get('folder_start', 0))
     frame_starts = request.args.getlist('frame_start')
     frame_starts = [int(x) if x.isdigit() else 0 for x in frame_starts]
@@ -76,7 +76,7 @@ def index():
         start = min(frame_starts[idx], max_start)
         row_frames = []
         folder_name = os.path.basename(folder)
-        labels = load_labels(folder_name)
+        labels = load_labels(folder_name, labels_dir)
 
         # --- Ensure all frames are present in labels with interpolated values ---
         total_frames = len(frames)
@@ -129,6 +129,7 @@ def index():
         folder_start=folder_start, 
         max_folder_start=max(0, total_folders - VISIBLE_ROWS),
         data_dir=data_dir,
+        labels_dir=labels_dir,
         frame_starts=frame_starts,
         FRAMES_PER_ROW=FRAMES_PER_ROW
     )
@@ -156,8 +157,8 @@ def save_label():
     value = float(data['value'])
     value = max(0.0, min(1.0, value))  # Clamp between 0 and 1
 
-    # Paths
-    labels_dir = os.path.abspath('./video-frame-accessor/labels/')
+    # Get labels_dir from query or default
+    labels_dir = request.args.get('labels_dir', './video-frame-accessor/labels/')
     os.makedirs(labels_dir, exist_ok=True)
     user_points_path = os.path.join(labels_dir, f'{folder}_user_points.json')
     labels_path = os.path.join(labels_dir, f'{folder}.json')
@@ -228,15 +229,15 @@ def save_label():
 
     # Save interpolated labels for all frames
     atomic_write_json(labels_path, labels)
-
     return jsonify(success=True)
 
 @app.route('/get_labels')
 def get_labels():
     folder = request.args.get('folder')
+    labels_dir = request.args.get('labels_dir', './video-frame-accessor/labels/')
     if not folder:
         return jsonify({})
-    labels = load_labels(folder)
+    labels = load_labels(folder, labels_dir)
     return jsonify(labels)
 
 if __name__ == "__main__":

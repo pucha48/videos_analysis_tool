@@ -13,11 +13,23 @@
         .row-flex { display: flex; align-items: flex-start; margin-bottom: 10px; }
         .main-flex { display: flex; }
         .vertical-bar-container { display: flex; flex-direction: column; align-items: center; margin-left: 20px; }
+        .folder-select-bar { margin-bottom: 20px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <h2>Video Frame Viewer</h2>
+    <div class="folder-select-bar">
+        <label>
+            <button onclick="selectDataFolder()">Select Data Folder</button>
+            <input type="file" id="data-folder-input" webkitdirectory directory style="display:none" onchange="setDataFolder(event)">
+        </label>
+        <label>
+            <button onclick="selectLabelsFolder()">Select Labels Folder</button>
+            <input type="file" id="labels-folder-input" webkitdirectory directory style="display:none" onchange="setLabelsFolder(event)">
+        </label>
+        <span id="current-folders"></span>
+    </div>
     <div class="main-flex">
         <div style="flex: 1;">
             {% for row in rows %}
@@ -172,6 +184,25 @@
         frame_starts.forEach(v => params.append('frame_start', v));
         params.set('folder_start', {{ folder_start }});
         window.location.search = params.toString();
+    }
+
+    // Folder selection logic (client-side only, for UI feedback)
+    function selectDataFolder() {
+        document.getElementById('data-folder-input').click();
+    }
+    function selectLabelsFolder() {
+        document.getElementById('labels-folder-input').click();
+    }
+    function setDataFolder(event) {
+        let folder = event.target.files.length > 0 ? event.target.files[0].webkitRelativePath.split('/')[0] : '';
+        document.getElementById('current-folders').innerText = 'Data Folder: ' + folder;
+        // To actually use this folder on the backend, you would need to send it to the server and reload.
+    }
+    function setLabelsFolder(event) {
+        let folder = event.target.files.length > 0 ? event.target.files[0].webkitRelativePath.split('/')[0] : '';
+        let current = document.getElementById('current-folders').innerText;
+        document.getElementById('current-folders').innerText = current + ' | Labels Folder: ' + folder;
+        // To actually use this folder on the backend, you would need to send it to the server and reload.
     }
     </script>
 </body>
