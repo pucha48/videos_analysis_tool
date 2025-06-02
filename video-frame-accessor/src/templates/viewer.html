@@ -19,30 +19,21 @@
 </head>
 <body>
     <h2>Video Frame Viewer</h2>
-    <div class="folder-select-bar">
-        <label>
-            <button onclick="selectDataFolder()">Select Data Folder</button>
-            <input type="file" id="data-folder-input" webkitdirectory directory style="display:none" onchange="setDataFolder(event)">
-        </label>
-        <label>
-            <button onclick="selectLabelsFolder()">Select Labels Folder</button>
-            <input type="file" id="labels-folder-input" webkitdirectory directory style="display:none" onchange="setLabelsFolder(event)">
-        </label>
-        <span id="current-folders"></span>
-    </div>
     <div class="main-flex">
         <div style="flex: 1;">
             {% for row in rows %}
             <div class="row-flex">
                 <div>
-                    <div class="folder-label">{{ row.folder }}</div>
+                    <div class="folder-label">{{ row.folder }}
+                        <button onclick="saveLabellingGuide('{{ row.folder }}')">Save Labelling Guide</button>
+                    </div>
                     <div style="display: flex;" class="slider-row" data-row-idx="{{ loop.index0 }}">
                         {% for frame in row.frames %}
                             <div class="frame-cell">
                                 {% if frame %}
                                     <div style="position: relative;">
                                         <img class="thumbnail" src="{{ frame.img_url }}">
-                                        <div class="float-label">{{ frame.float_val }}</div> <!-- Show float from filename -->
+                                        <div class="float-label">{{ frame.float_val }}</div>
                                     </div>
                                     <div style="font-size: 10px;">{{ frame.filename }}</div>
                                     <input class="input-box"
@@ -60,6 +51,7 @@
                             <div style="font-size: 10px;">Box Plot</div>
                         </div>
                     </div>
+                    {% if row.max_start > 0 %}
                     <input 
                         type="range" 
                         min="0" 
@@ -69,22 +61,12 @@
                         oninput="updateFrameSlider({{ loop.index0 }}, this.value)"
                         style="width: {{ 130 * row.frames|length }}px;"
                     >
+                    {% else %}
+                    <!-- Hide slider if not needed -->
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}
-        </div>
-        <!-- Single vertical bar for all videos -->
-        <div class="vertical-bar-container">
-            <input 
-                type="range" 
-                min="0" 
-                max="{{ max_folder_start }}" 
-                value="{{ folder_start }}" 
-                class="vertical-slider"
-                oninput="updateFolderSlider(this.value)"
-                style="height: {{ 130 * rows|length }}px;"
-            >
-            <div>Scroll Videos</div>
         </div>
     </div>
     <script>
@@ -136,6 +118,8 @@
                     renderPlot({{ loop.index0 }}, labelsArr, valuesArr);
                 });
         {% endfor %}
+        attachSliderListeners();
+        // Do NOT call reinitPlots() here
     });
 
     // Update plot after user input
@@ -164,26 +148,67 @@
           });
     }
 
-    function updateFolderSlider(val) {
-        let params = new URLSearchParams(window.location.search);
-        params.set('folder_start', val);
-        params.delete('frame_start');
-        window.location.search = params.toString();
+    // Attach slider event listeners dynamically
+    function attachSliderListeners() {
+        // Frame sliders
+        document.querySelectorAll('input[id^="frame_slider_"]').forEach((slider, idx) => {
+            slider.oninput = function() {
+                updateFrameSlider(idx, this.value);
+            };
+        });
     }
+
     function updateFrameSlider(row, val) {
-        let params = new URLSearchParams(window.location.search);
+        // Get all frame slider values from DOM
         let frame_starts = [];
-        for (let i = 0; i < {{ rows|length }}; i++) {
-            if (i == row) frame_starts.push(val);
-            else {
-                let slider = document.getElementById('frame_slider_' + i);
-                frame_starts.push(slider ? slider.value : 0);
-            }
-        }
+        document.querySelectorAll('input[id^="frame_slider_"]').forEach((slider, idx) => {
+            frame_starts.push(idx == row ? val : slider.value);
+        });
+        let params = new URLSearchParams(window.location.search);
         params.delete('frame_start');
         frame_starts.forEach(v => params.append('frame_start', v));
-        params.set('folder_start', {{ folder_start }});
-        window.location.search = params.toString();
+        fetch(`/?${params.toString()}`)
+            .then(response => response.text())
+            .then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newMainFlex = doc.querySelector('.main-flex');
+                document.querySelector('.main-flex').replaceWith(newMainFlex);
+                attachSliderListeners();
+                reinitPlots();
+            });
+    }
+    function reinitPlots() {
+        document.querySelectorAll('canvas[id^="plot_"]').forEach((canvas, idx) => {
+            let folder = canvas.closest('.row-flex').querySelector('.folder-label').textContent.trim();
+            fetch(`/get_labels?folder=${encodeURIComponent(folder)}`)
+                .then(resp => resp.json())
+                .then(labels => {
+                    let labelsArr = Object.keys(labels);
+                    let valuesArr = Object.values(labels).map(parseFloat);
+                    // Always create a new Chart for the new canvas
+                    new Chart(canvas.getContext('2d'), {
+                        type: 'line',
+                        data: {
+                            labels: labelsArr,
+                            datasets: [{
+                                label: '',
+                                data: valuesArr,
+                                borderColor: 'blue',
+                                backgroundColor: 'rgba(0,0,255,0.1)',
+                                pointRadius: 2,
+                                fill: false,
+                                tension: 0.1
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: { legend: { display: false } },
+                            scales: { x: { display: false }, y: { min: 0, max: 1, display: false } }
+                        }
+                    });
+                });
+        });
     }
 
     // Folder selection logic (client-side only, for UI feedback)
@@ -203,6 +228,22 @@
         let current = document.getElementById('current-folders').innerText;
         document.getElementById('current-folders').innerText = current + ' | Labels Folder: ' + folder;
         // To actually use this folder on the backend, you would need to send it to the server and reload.
+    }
+
+    function saveLabellingGuide(folder) {
+        fetch('/save_labelling_guide', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({folder: folder})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Labelling guide saved!');
+            } else {
+                alert('Error: ' + (data.error || 'Could not save labelling guide.'));
+            }
+        });
     }
     </script>
 </body>

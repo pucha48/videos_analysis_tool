@@ -5,13 +5,15 @@ import json
 import tempfile
 import shutil
 import time
-from flask import Flask, render_template, request, send_from_directory, abort, jsonify
+from flask import Flask, render_template, request, send_from_directory, abort, jsonify, send_file
+from PIL import Image, ImageDraw, ImageFont
 
 THUMBNAIL_SIZE = (220, 180)
 FRAMES_PER_ROW = 7
 VISIBLE_ROWS = 3
-DATA_PATH = "./../video-frame-accessor/data/"
-LABEL_FOLDER_PATH = "../labels"
+DATA_PATH = os.path.abspath("video-frame-accessor/data/")
+LABEL_FOLDER_PATH = os.path.abspath("video-frame-accessor/labels/")
+SAMPLE_EVERY_X = 8  # User-defined sampling rate for UI display
 
 app = Flask(__name__)
 
@@ -63,10 +65,10 @@ def index():
     frame_starts = [int(x) if x.isdigit() else 0 for x in frame_starts]
     
     video_folders = get_video_folders(data_dir)
-    total_folders = len(video_folders)
-    folder_start = min(max(folder_start, 0), max(0, total_folders - VISIBLE_ROWS))
-    visible_folders = video_folders[folder_start:folder_start+VISIBLE_ROWS]
+    # Show all folders, remove slicing logic
+    visible_folders = video_folders
 
+    # Remove frame_starts padding logic since all folders are shown
     while len(frame_starts) < len(visible_folders):
         frame_starts.append(0)
     frame_starts = frame_starts[:len(visible_folders)]
@@ -74,7 +76,9 @@ def index():
     rows = []
     for idx, folder in enumerate(visible_folders):
         frames = get_frames(folder)
-        max_start = max(0, len(frames) - FRAMES_PER_ROW)
+        # Sample frames for UI display only
+        sampled_frames = frames[::SAMPLE_EVERY_X] if SAMPLE_EVERY_X > 1 else frames
+        max_start = max(0, len(sampled_frames) - FRAMES_PER_ROW)
         start = min(frame_starts[idx], max_start)
         row_frames = []
         folder_name = os.path.basename(folder)
@@ -103,8 +107,8 @@ def index():
 
         for i in range(FRAMES_PER_ROW):
             frame_idx = start + i
-            if frame_idx < len(frames):
-                frame_path = frames[frame_idx]
+            if frame_idx < len(sampled_frames):
+                frame_path = sampled_frames[frame_idx]
                 float_val = extract_float_from_filename(frame_path)
                 img_url = "/frame_image?folder={}&img={}".format(
                     urllib.parse.quote(folder_name),
@@ -129,8 +133,8 @@ def index():
     return render_template(
         'viewer.html', 
         rows=rows, 
-        folder_start=folder_start, 
-        max_folder_start=max(0, total_folders - VISIBLE_ROWS),
+        folder_start=0,  # No longer used
+        max_folder_start=0,  # No longer used
         data_dir=data_dir,
         labels_dir=labels_dir,
         frame_starts=frame_starts,
@@ -242,6 +246,62 @@ def get_labels():
         return jsonify({})
     labels = load_labels(folder, labels_dir)
     return jsonify(labels)
+
+@app.route('/save_labelling_guide', methods=['POST'])
+def save_labelling_guide():
+    data = request.get_json()
+    folder = data['folder']
+    data_dir = os.path.abspath(DATA_PATH)
+    labels_dir = os.path.abspath(LABEL_FOLDER_PATH)
+    user_points_path = os.path.join(labels_dir, f'{folder}_user_points.json')
+    folder_path = os.path.join(data_dir, folder)
+    guide_dir = os.path.join(labels_dir, 'guide')
+    os.makedirs(guide_dir, exist_ok=True)
+
+    # Load user points (anchors)
+    if os.path.exists(user_points_path):
+        with open(user_points_path, 'r') as f:
+            user_points = json.load(f)
+    else:
+        return jsonify(success=False, error='No user points found')
+
+    # Get sorted indices and values
+    frames = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+    user_indices = [(idx, fname, float(user_points[fname])) for idx, fname in enumerate(frames) if fname in user_points]
+    if not user_indices:
+        return jsonify(success=False, error='No user points found')
+
+    # Load images and prepare for concatenation
+    images = []
+    captions = []
+    for idx, fname, val in user_indices:
+        img_path = os.path.join(folder_path, fname)
+        img = Image.open(img_path).convert('RGB')
+        images.append(img)
+        captions.append(f'idx: {idx}  val: {val:.2f}')
+
+    # Resize images to same height
+    thumb_height = 180
+    thumb_width = 220
+    images = [img.resize((thumb_width, thumb_height)) for img in images]
+
+    # Create a new image to paste all images horizontally
+    total_width = thumb_width * len(images)
+    caption_height = 40
+    guide_img = Image.new('RGB', (total_width, thumb_height + caption_height), (255,255,255))
+    draw = ImageDraw.Draw(guide_img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+    except:
+        font = ImageFont.load_default()
+    for i, img in enumerate(images):
+        guide_img.paste(img, (i*thumb_width, 0))
+        # Draw caption below
+        draw.text((i*thumb_width+5, thumb_height+5), captions[i], fill=(0,0,0), font=font)
+
+    out_path = os.path.join(guide_dir, f'{folder}.png')
+    guide_img.save(out_path)
+    return jsonify(success=True, path=out_path)
 
 if __name__ == "__main__":
     app.run(debug=True)
