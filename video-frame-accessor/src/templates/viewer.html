@@ -19,14 +19,13 @@
 </head>
 <body>
     <h2>Video Frame Viewer</h2>
+    <button id="save-all-guides-btn" onclick="saveAllLabellingGuides()">Save All Labelling Guides</button>
     <div class="main-flex">
         <div style="flex: 1;">
             {% for row in rows %}
-            <div class="row-flex">
+            <div class="row-flex" data-sampled-filenames="{{ row.sampled_filenames|join(',') }}" data-folder="{{ row.folder }}">
                 <div>
-                    <div class="folder-label">{{ row.folder }}
-                        <button onclick="saveLabellingGuide('{{ row.folder }}')">Save Labelling Guide</button>
-                    </div>
+                    <div class="folder-label">{{ row.folder }}</div>
                     <div style="display: flex;" class="slider-row" data-row-idx="{{ loop.index0 }}">
                         {% for frame in row.frames %}
                             <div class="frame-cell">
@@ -72,20 +71,28 @@
     <script>
     let charts = {};
 
-    function renderPlot(rowIdx, labels, values) {
+    function renderPlot(rowIdx, labels, values, sampledFilenames) {
+        // Only plot values for sampledFilenames (the visible frames)
+        let plotLabels = [];
+        let plotValues = [];
+        sampledFilenames.forEach(fn => {
+            let idx = labels.indexOf(fn);
+            plotLabels.push(fn);
+            plotValues.push(idx !== -1 ? values[idx] : null);
+        });
         const ctx = document.getElementById('plot_' + rowIdx).getContext('2d');
         if (charts[rowIdx]) {
-            charts[rowIdx].data.labels = labels;
-            charts[rowIdx].data.datasets[0].data = values;
+            charts[rowIdx].data.labels = plotLabels;
+            charts[rowIdx].data.datasets[0].data = plotValues;
             charts[rowIdx].update();
         } else {
             charts[rowIdx] = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels,
+                    labels: plotLabels,
                     datasets: [{
                         label: '',
-                        data: values,
+                        data: plotValues,
                         borderColor: 'blue',
                         backgroundColor: 'rgba(0,0,255,0.1)',
                         pointRadius: 2,
@@ -109,17 +116,18 @@
 
     // Initial plot rendering for all frames in each row
     window.addEventListener('DOMContentLoaded', function() {
-        {% for row in rows %}
-            fetch(`/get_labels?folder={{ row.folder }}`)
+        document.querySelectorAll('.row-flex').forEach((rowDiv, idx) => {
+            let folder = rowDiv.getAttribute('data-folder');
+            let sampledFilenames = rowDiv.getAttribute('data-sampled-filenames').split(',');
+            fetch(`/get_labels?folder=${encodeURIComponent(folder)}`)
                 .then(resp => resp.json())
                 .then(labels => {
                     let labelsArr = Object.keys(labels);
                     let valuesArr = Object.values(labels).map(parseFloat);
-                    renderPlot({{ loop.index0 }}, labelsArr, valuesArr);
+                    renderPlot(idx, labelsArr, valuesArr, sampledFilenames);
                 });
-        {% endfor %}
+        });
         attachSliderListeners();
-        // Do NOT call reinitPlots() here
     });
 
     // Update plot after user input
@@ -134,16 +142,16 @@
             })
         }).then(response => response.json())
           .then(data => {
-            // After saving, fetch new labels and update the plot
             let folder = input.getAttribute('data-folder');
-            let rowDiv = input.closest('.slider-row');
-            let rowIdx = rowDiv ? rowDiv.getAttribute('data-row-idx') : 0;
+            let rowDiv = input.closest('.slider-row').closest('.row-flex');
+            let rowIdx = Array.from(document.querySelectorAll('.row-flex')).indexOf(rowDiv);
+            let sampledFilenames = rowDiv.getAttribute('data-sampled-filenames').split(',');
             fetch(`/get_labels?folder=${encodeURIComponent(folder)}`)
                 .then(resp => resp.json())
                 .then(labels => {
                     let labelsArr = Object.keys(labels);
                     let valuesArr = Object.values(labels).map(parseFloat);
-                    renderPlot(rowIdx, labelsArr, valuesArr);
+                    renderPlot(rowIdx, labelsArr, valuesArr, sampledFilenames);
                 });
           });
     }
@@ -174,39 +182,21 @@
                 const doc = parser.parseFromString(html, 'text/html');
                 const newMainFlex = doc.querySelector('.main-flex');
                 document.querySelector('.main-flex').replaceWith(newMainFlex);
+                charts = {}; // Clear all chart instances before reinit
                 attachSliderListeners();
                 reinitPlots();
             });
     }
     function reinitPlots() {
-        document.querySelectorAll('canvas[id^="plot_"]').forEach((canvas, idx) => {
-            let folder = canvas.closest('.row-flex').querySelector('.folder-label').textContent.trim();
+        document.querySelectorAll('.row-flex').forEach((rowDiv, idx) => {
+            let folder = rowDiv.getAttribute('data-folder');
+            let sampledFilenames = rowDiv.getAttribute('data-sampled-filenames').split(',');
             fetch(`/get_labels?folder=${encodeURIComponent(folder)}`)
                 .then(resp => resp.json())
                 .then(labels => {
                     let labelsArr = Object.keys(labels);
                     let valuesArr = Object.values(labels).map(parseFloat);
-                    // Always create a new Chart for the new canvas
-                    new Chart(canvas.getContext('2d'), {
-                        type: 'line',
-                        data: {
-                            labels: labelsArr,
-                            datasets: [{
-                                label: '',
-                                data: valuesArr,
-                                borderColor: 'blue',
-                                backgroundColor: 'rgba(0,0,255,0.1)',
-                                pointRadius: 2,
-                                fill: false,
-                                tension: 0.1
-                            }]
-                        },
-                        options: {
-                            responsive: false,
-                            plugins: { legend: { display: false } },
-                            scales: { x: { display: false }, y: { min: 0, max: 1, display: false } }
-                        }
-                    });
+                    renderPlot(idx, labelsArr, valuesArr, sampledFilenames);
                 });
         });
     }
@@ -230,19 +220,29 @@
         // To actually use this folder on the backend, you would need to send it to the server and reload.
     }
 
-    function saveLabellingGuide(folder) {
-        fetch('/save_labelling_guide', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({folder: folder})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert('Labelling guide saved!');
-            } else {
-                alert('Error: ' + (data.error || 'Could not save labelling guide.'));
-            }
+    function saveAllLabellingGuides() {
+        // Collect all folders with user points
+        let folders = Array.from(document.querySelectorAll('.row-flex'))
+            .map(rowDiv => rowDiv.getAttribute('data-folder'));
+        let completed = 0;
+        let failed = 0;
+        folders.forEach(folder => {
+            fetch('/save_labelling_guide', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({folder: folder})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    completed++;
+                } else {
+                    failed++;
+                }
+                if (completed + failed === folders.length) {
+                    alert(`Labelling guides saved for ${completed} folders. ${failed > 0 ? failed + ' failed.' : ''}`);
+                }
+            });
         });
     }
     </script>

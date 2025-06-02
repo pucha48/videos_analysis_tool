@@ -13,7 +13,7 @@ FRAMES_PER_ROW = 7
 VISIBLE_ROWS = 3
 DATA_PATH = os.path.abspath("video-frame-accessor/data/")
 LABEL_FOLDER_PATH = os.path.abspath("video-frame-accessor/labels/")
-SAMPLE_EVERY_X = 8  # User-defined sampling rate for UI display
+SAMPLE_EVERY_X = 16  # User-defined sampling rate for UI display
 
 app = Flask(__name__)
 
@@ -122,12 +122,15 @@ def index():
                 })
             else:
                 row_frames.append(None)
+        # Add sampled_filenames for robust frontend sync
+        sampled_filenames = [os.path.basename(f) for f in sampled_frames]
         rows.append({
             'folder': folder_name,
             'frames': row_frames,
             'max_start': max_start,
             'start': start,
-            'labels': labels
+            'labels': labels,
+            'sampled_filenames': sampled_filenames
         })
 
     return render_template(
